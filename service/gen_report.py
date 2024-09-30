@@ -1,9 +1,11 @@
 import csv
 from io import StringIO
+import ipaddress
 import re
 from api.fortianalyzer_api import call_api_fortianalyzer_jsonrpc
 from global_constant import GLOBAL_CONSTANT
 from datetime import datetime, timedelta
+from model.report_list_model_ip_pivot import ReportListModelIpPivot
 from model.raw_report_model import RawReportModel
 from model.report_model import ReportModel
 from model.report_model_ip_pivot import ReportModelIpPivot
@@ -70,8 +72,6 @@ def get_list_of_report():
 
 def get_report_data(report_tid_map: dict[str, str]):
     list_report_model: list[ReportModel] = []
-    list_report_model_pivot: list[ReportModelIpPivot] = []
-    list_report_raw_model: list[RawReportModel] = []
 
     for report_title, tid in report_tid_map.items():
         request_body = {
@@ -95,13 +95,18 @@ def get_report_data(report_tid_map: dict[str, str]):
             reportModel : ReportModel = ReportModel()
             dict_ip_pivot = {}
             response_data = response.json()
+            list_report_model_pivot: list[ReportModelIpPivot] = []
+            list_report_raw_model: list[RawReportModel] = []
+            set_date_pivot = set()
             try:
                 report_name = response_data["result"]["name"]
                 csv_data = response_data["result"]["data"]
+                report_list_model_ip_pivot = ReportListModelIpPivot() 
                 # Parse CSV data
+                csv_data = csv_data.replace('\ni2n:3\r1', '')
                 csv_file = StringIO(csv_data)
                 if "No matching log data for this report" in csv_data:
-                    reportModel.report_model_ip_pivot = []
+                    reportModel.report_model_list_ip_pivot = []
                     reportModel.raw_report_model_ip = []
                     reportModel.report_name = report_name
                     reportModel.report_title = report_title
@@ -134,6 +139,7 @@ def get_report_data(report_tid_map: dict[str, str]):
                                 data_report_pivot.date_total[row['log_date']] += int(row['total']) 
                             else:
                                 data_report_pivot.date_total[row['log_date']] = int(row['total']) 
+                            set_date_pivot.add(row['log_date'])
                         else:
                             report_model_ip_pivot = ReportModelIpPivot()
                             report_model_ip_pivot.ip = row['srcip']
@@ -141,12 +147,31 @@ def get_report_data(report_tid_map: dict[str, str]):
                             report_model_ip_pivot.date_total = {row['log_date']: int(row['total'])} 
                             dict_ip_pivot[row['srcip']] = report_model_ip_pivot
                             list_report_model_pivot.append(report_model_ip_pivot)
-                            
+                            set_date_pivot.add(row['log_date'])
+                    
+                    if(list_report_model_pivot is not None):
+                        list_report_model_pivot.sort(key=lambda x: x.total, reverse=True)
+                        slice_end = len(list_report_model_pivot) if len(list_report_model_pivot) < 20 else 20
+                        top_ip_total = list_report_model_pivot[:slice_end]
+                        if 'Branch' in report_name:
+                            for ip_pivot in top_ip_total:
+                                ip = ip_pivot.ip.rsplit('.', 1)[0] + ".0/24"
+                                branch_name = GLOBAL_CONSTANT.IP_OFFICE_MAPPING[ip]
+                                ip_pivot.subnet_ip = ip
+                                ip_pivot.subnet_branch = branch_name
+                            report_list_model_ip_pivot.top_20_ip_pivot = top_ip_total
+                           
                     reportModel.raw_report_model_ip = list_report_raw_model
-                    reportModel.report_model_ip_pivot = list_report_model_pivot
                     reportModel.report_name = report_name
                     reportModel.report_title = report_title
+                    report_list_model_ip_pivot.report_model_ip_pivot = list_report_model_pivot
+                    sorted_date =sorted_date = sorted(list(set_date_pivot), key=lambda date: datetime.strptime(date, "%Y-%m-%d"))
+                    report_list_model_ip_pivot.list_date = sorted_date
+                    reportModel.report_model_list_ip_pivot = report_list_model_ip_pivot
+                    
+                    
                     list_report_model.append(reportModel)
+                    
                         
 
             except (KeyError, IndexError):
